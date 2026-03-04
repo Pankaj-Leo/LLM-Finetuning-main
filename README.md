@@ -1,161 +1,155 @@
 # Complete LLM Fine-Tuning & Deployment Playbook
 
-**Instruction Tuning → PEFT (LoRA / QLoRA) → Preference Alignment (DPO)  
-→ Quantization (GPTQ / AWQ / GGUF) → Production Deployment**
-
+Most organizations experimenting with large language models hit the same wall: base models don't follow domain tone, policy, or structure. RAG alone doesn't fix behavior—JSON schemas, refusals, and style remain inconsistent. Full fine-tuning is too expensive, and even good models fail if latency and VRAM costs aren't considered.
 
 ---
-
-## Why this project exists (real production problem)
-
-Most organizations experimenting with LLMs face the same failures:
-
--  Base LLMs don’t follow **domain tone, policy, or structure**
--  **RAG alone** doesn’t fix behavior (JSON schemas, refusals, safety, style)
--  Full fine-tuning is **too expensive** and hard to deploy
--  Even good models fail if **latency and VRAM costs** are ignored
-
-This repository is a **complete, auditable blueprint** for building **deployable LLM systems**, not demos.
+![](Finetuning.png)
 
 ---
 
 ## What this repository demonstrates 
 
-### 1. Decision intelligence: Finetune vs RAG vs Agents
+### Decision intelligence: Finetune vs RAG vs Agents
 **Rule of thumb**:
 - Use **Fine-Tuning** → when behavior is wrong
 - Use **RAG** → when knowledge is missing
 - Use **Agents** → when multi-step reasoning/tools are needed
 
-This distinction is explicitly covered in the syllabus and notebooks.
+This distinction is explicitly covered in the notebooks.
+
+---
+## 1) Knowledge Distillation
+**What:** A large **teacher** model trains a smaller **student** to mimic its outputs (often using soft probabilities).
+
+**Why it matters**
+- Large models are too slow/costly to serve.
+- A smaller student cuts latency/cost while retaining most quality.
+
+**How**
+- Run teacher on representative prompts → collect soft targets.
+- Train student to match teacher distributions (often KL loss) + optional task loss.
+
+**Key knobs / gotchas**
+- **Temperature (T):** smooths teacher outputs; can stabilize training.
+- **Loss mix:** KL vs hard-label weighting.
+- **Student size:** too small → quality drop; too big → limited savings.
+- Dataset must match production traffic.
 
 ---
 
-### 2. Instruction Fine-Tuning (SFT)
-**Goal:** teach the model *how* to respond, not *what* to know.
+## 2) Parameter-Efficient Fine-Tuning (LoRA / QLoRA)
+**What:** Train tiny **adapters** while freezing the base model.
 
-Supported formats:
-- Alpaca (instruction following)
-- ShareGPT (multi-turn chat)
+**Why it matters**
+- Full fine-tuning is expensive (updates billions of weights).
+- LoRA adapts behavior with far less compute and memory.
 
-Benefits:
-- Consistent formatting
-- Domain tone enforcement
-- Lower prompt complexity
-- Reduced hallucination under constraints
+**How (QLoRA)**
+- Load the base model in **4-bit**.
+- Train adapters in higher precision.
+- Enables fine-tuning on limited GPUs (setup-dependent).
 
----
-
-### 3. Parameter-Efficient Fine-Tuning (LoRA / QLoRA)
-
-**Why PEFT matters**
-- Full fine-tuning updates billions of weights → expensive
-- LoRA trains small low-rank adapters → efficient and stable
-
-**QLoRA advantage**
-- Base model loaded in **4-bit**
-- Adapters trained in higher precision
-- Enables fine-tuning on consumer GPUs
-
-**Key knobs (from LLaMA Factory configs):**
+**Key knobs**
 - `lora_r` → capacity vs memory
 - `lora_alpha` → update scaling
 - `lora_dropout` → regularization
 - `target_modules` → where learning happens
 - `gradient_accumulation_steps` → batch simulation
-- `cutoff_len` → context length tradeoff
+- `cutoff_len` → context length vs VRAM
 
 ---
 
-### 4. Preference Alignment (DPO)
+## 3) Instruction Fine-Tuning (SFT)
+**What:** Supervised training on **instruction → input → response** examples.
 
-Instruction tuning answers *correctly*.  
-Preference tuning answers *well*.
+**Why it matters**
+- Base models don’t reliably follow format or domain tone.
+- Prompt-only solutions are brittle and costly (long prompts, retries).
 
-**DPO (Direct Preference Optimization)**:
-- Trains on `(prompt, chosen, rejected)` pairs
-- No reward model required
-- Simpler and more stable than PPO-based RLHF
+**How**
+- Build Alpaca/ShareGPT/custom JSONL datasets.
+- Train to predict the target response (supervised next-token objective).
+- Use consistent templates so structure is learnable.
 
-**Key concept: `beta`**
-- Controls strength of preference enforcement
-- Higher beta → stronger alignment, risk of overfitting
-- Lower beta → safer but weaker preference shift
-
----
-
-### 5. Quantization (deployment reality)
-
-Fine-tuned models are useless if they can’t be served cheaply.
-
-#### Quantization methods covered:
-- **bitsandbytes** (easy 8-bit / 4-bit inference)
-- **GPTQ** (gradient-aware post-training quantization)
-- **AWQ** (activation-aware, often higher quality)
-- **GGUF / GGML** (CPU & Apple Silicon via llama.cpp)
-
-#### PTQ vs QAT:
-- **PTQ**: fast, calibration-based, industry default
-- **QAT**: higher fidelity, much more expensive
-
-**Deployment decision matrix:**
-
-| Goal | Best Option |
-|---|---|
-| Fast GPU inference | GPTQ / AWQ |
-| Lowest VRAM | QLoRA / GPTQ |
-| Laptop / Edge | GGUF + llama.cpp |
-| High-throughput API | vLLM / TensorRT-LLM |
+**Key knobs / gotchas**
+- Data quality dominates: dedup, consistency, schema-correct examples (if JSON).
+- `cutoff_len` raises quality coverage but increases VRAM.
+- Overtraining can cause “style lock-in” or drift.
 
 ---
 
-### 6. Multimodal Extension (Chapter 9)
+## 4) Preference Alignment (DPO)
+**What:** Train on **(prompt, chosen, rejected)** pairs to improve response quality.
 
-This repo includes **Multimodal LLM foundations**:
+**Why it matters**
+- “Correct” answers can still be unhelpful: weak structure, poor tone, messy refusals.
+- DPO improves preference alignment without a separate reward model.
 
-- Vision encoders (CLIP / ViT)
-- Vision-Language alignment
-- Captioning, VQA, document understanding
-- Cross-modal embedding fusion
+**How**
+- Collect preference pairs (human review or ranked candidates).
+- Optimize the model to prefer chosen over rejected.
 
-This enables:
-- PDF understanding
-- Image-aware assistants
-- Multimodal RAG pipelines
+- `beta` controls preference strength:
+- higher → stronger shift, higher overfit risk v/s lower → weaker shift, safer retention
 
----
-
-## Repository Map (what to review first)
-
-### 🔹 End-to-End Pipeline
-- `Final_Finetuning_all_in_one.ipynb`
-
-### 🔹 Alignment
-- `Preference_Aligned_Training_DPO_final.ipynb`
-
-### 🔹 Quantization
-- GPTQ / AWQ notebooks
-- GGUF export workflows
-
-### 🔹 Multimodal
-- `Chapter 9 - Multimodal Large Language Models.ipynb`
-
-### 🔹 Classical NLP (foundation credibility)
-- BERT fine-tuning
-- Embeddings & MTEB
-- Knowledge distillation
 
 ---
 
-## Evaluation (expected additions)
+## 5) Quantization
+**What:** Reduce weight precision (8-bit/4-bit) to cut VRAM and speed inference.
 
-To make this production-grade, add:
+**Why it matters**
+- Deployment is constrained by latency + VRAM + cost.
+- Enables CPU/edge deployment for some scenarios.
 
-- `results/`
-  - before/after prompt comparisons
-  - preference win-rate
-  - latency & VRAM table (FP16 vs INT8 vs INT4)
-  - quantization calibration notes
+**How (common paths)**
+- **bitsandbytes:** quick 8-bit/4-bit inference path (runtime-dependent).
+- **GPTQ / AWQ:** GPU-focused post-training quantization (kernel/runtime support matters).
+- **GGUF:** CPU/Apple Silicon via **llama.cpp**.
+
+---
+
+## 6) Domain-Specific Fine-Tuning (continued pretraining)
+**What:** Continue pretraining on domain text to internalize terminology and patterns.
+
+**Why it matters**
+- General models often miss domain conventions and jargon.
+- Improves downstream SFT generalization with fewer examples.
+
+**How**
+- Clean and dedup domain corpus (docs, tickets, manuals).
+- Continue pretraining (next-token objective), then run SFT for instruction style.
+
+**Key knobs / gotchas**
+- Too much domain pretraining can cause catastrophic forgetting.
+- This is not “loading PDFs” (that’s RAG) — it changes model priors.
+
+---
+
+## 7) Hugging Face (workflow unifier)
+**What:** A standard ecosystem for datasets, training, adapters, and distribution.
+
+**Why it matters**
+- Reduces workflow fragmentation and improves reproducibility.
+- Makes it easy to version models/adapters and share training configs.
+
+**How**
+- `datasets` for data loading/versioning
+- `transformers` for training/inference
+- `peft` for LoRA/QLoRA
+- `trl` for DPO
+- Hub (or internal registry) to version artifacts
+
+---
+
+## Repository Highlights
+
+- **End-to-end:** `Final_Finetuning_all_in_one.ipynb`
+- **Knowledge distillation:** `Knowledge_DIstillation_in_Deep_Learning.ipynb`
+- **PEFT & Hugging Face:** `huggingface_solution.ipynb`, `huggingface_crash_course.ipynb`
+- **Alignment:** `Preference_Aligned_Training_DPO_final.ipynb`
+- **Quantization:** GPTQ, AWQ, GGUF notebooks
+- **Domain-specific:** Instruction tuning on PDF and pharma datasets
 
 ---
 
@@ -178,8 +172,3 @@ AI Engineer | AI Product Manager | AI Solutions Architect
 - GitHub: https://github.com/Pankaj-Leo  
 - Website: https://www.pankajsomkuwarai.com  
 - Email: pankaj.som1610@gmail.com  
-
-## License
-Educational / research use. Verify redistribution rights for third-party datasets.
-
----
